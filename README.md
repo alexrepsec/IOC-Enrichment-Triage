@@ -12,7 +12,8 @@ This project demonstrates the deployment of an automated **IOC (Indicator of Com
 - Designing multi-node SOAR workflows with parallel API enrichment
 - Integrating threat intelligence APIs (VirusTotal v3, AbuseIPDB v2) into automated pipelines
 - Implementing conditional branching in SOAR workflows for triage logic
-- Building automated IOC ingestion from URLhaus threat feeds using Python
+- Building automated IOC ingestion from URLhaus threat feeds using Python 3
+- Parsing and extracting IPs from CSV threat feeds with regex
 - Sending real-time enriched security alerts to Discord via webhook
 - Troubleshooting variable scoping, API authentication, and workflow execution in Shuffle
 ---
@@ -78,11 +79,11 @@ This project demonstrates the deployment of an automated **IOC (Indicator of Com
 │   │   │              Shuffle SOAR (Docker)                  │  │  │
 │   │   │                                                      │  │  │
 │   │   │  Webhook → get ip → VirusTotal ──┐                  │  │  │
-│   │   │                  → AbuseIPDB  ──► Evaluate ──► Discord│  │  │
+│   │   │                  → AbuseIPDB  ──► Evaluate ──► Discord│ │  │
 │   │   └────────────────────────────────────────────────────┘  │  │
 │   │                                                            │  │
 │   │   ┌──────────────────────────────────┐                    │  │
-│   │   │  urlhaus_feeder.py (Python)       │                    │  │
+│   │   │  urlhaus_feeder.py (Python 3)     │                    │  │
 │   │   │  Fetches URLhaus feed every hour  │                    │  │
 │   │   │  Sends IPs to Shuffle webhook     │                    │  │
 │   │   └──────────────────────────────────┘                    │  │
@@ -230,23 +231,81 @@ Execution summary:
 - **Discord Aert** → status 204 ✅
 ---
  
-## 🤖 Step 9 — Automated URLhaus Feed
+## 🤖 Step 9 — Automated URLhaus Feed (Python 3)
  
-A Python script fetches the URLhaus malicious IP feed every hour and sends each IP through the Shuffle pipeline automatically:
+A Python script fetches the URLhaus malicious IP feed every hour and automatically sends each IP through the Shuffle enrichment pipeline:
  
 ![URLhaus Terminal](screenshots/urlhaus-terminal.png)
  
+### urlhaus_feeder.py
+ 
 ```python
-# urlhaus_feeder.py — runs on the VM
-# Fetches https://urlhaus.abuse.ch/downloads/csv_recent/
-# Extracts IPs from malicious URLs
-# Posts each IP to Shuffle webhook
-# Processes up to 10 IPs per hour to stay within API limits
+import requests
+import time
+import re
+import urllib3
+ 
+urllib3.disable_warnings()
+ 
+WEBHOOK = "https://<YOUR_SHUFFLE_IP>:3443/api/v1/hooks/<YOUR_WEBHOOK_ID>"
+ 
+ 
+def get_urlhaus_ips():
+    """Fetch recent malicious IPs from URLhaus feed."""
+    r = requests.get(
+        "https://urlhaus.abuse.ch/downloads/csv_recent/",
+        verify=False
+    )
+    ips = set()
+    for line in r.text.splitlines():
+        if line.startswith("#"):
+            continue
+        match = re.search(r'https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', line)
+        if match:
+            ips.add(match.group(1))
+    return ips
+ 
+ 
+def send_to_shuffle(ip):
+    """Send a single IP to the Shuffle SOAR webhook."""
+    try:
+        response = requests.post(
+            WEBHOOK,
+            json={"ip": ip},
+            verify=False,
+            timeout=10
+        )
+        print(f"Sent: {ip} — Status: {response.status_code}")
+    except Exception as e:
+        print(f"Error sending {ip}: {e}")
+ 
+ 
+def main():
+    while True:
+        print("Fetching URLhaus feed...")
+        ips = get_urlhaus_ips()
+        print(f"Found {len(ips)} unique IPs")
+ 
+        for ip in list(ips)[:10]:  # Max 10 IPs per run to stay within API limits
+            send_to_shuffle(ip)
+            time.sleep(5)  # 5 seconds between requests
+ 
+        print("Sleeping 1 hour...")
+        time.sleep(3600)
+ 
+ 
+if __name__ == "__main__":
+    main()
 ```
  
-Run the feeder:
+### Installation & Usage
+ 
 ```bash
-python3 ~/urlhaus_feeder.py &
+# Install dependency
+pip install requests --break-system-packages
+ 
+# Run in background
+python3 urlhaus_feeder.py &
 ```
  
 ---
@@ -267,6 +326,7 @@ IOC-Enrichment-Triage/
 │   ├── condition-setup.png
 │   └── urlhaus-terminal.png
 ├── urlhaus_feeder.py
+├── LICENSE
 └── README.md
 ```
  
